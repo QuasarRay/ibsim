@@ -1,0 +1,3 @@
+[workspace]
+members = ["ibsim-sys", "ibsim"]
+resolver = "2"
