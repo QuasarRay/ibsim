@@ -32,8 +32,10 @@ The high-level crate avoids exposing mutable fixed-size C buffers. It validates:
 - the 256-byte MAD payload limit and decoded MAD length;
 - the 31-byte NUL-terminated node-ID limit.
 
-Raw structs are zero-initialized before encoding so protocol-visible C padding
-never contains uninitialized Rust bytes.
+Encoding starts from a zero-filled wire buffer and writes each field at its
+`repr(C)` offset. This preserves the native C layout while guaranteeing that
+protocol-visible padding bytes are initialized without ever reading Rust struct
+padding.
 
 ## Build and test
 
