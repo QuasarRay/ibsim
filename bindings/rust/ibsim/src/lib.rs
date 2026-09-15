@@ -6,8 +6,7 @@
 //! The protocol is native-endian and native-layout by design, just like ibsim.
 
 use std::fmt;
-use std::mem::{size_of, MaybeUninit};
-use std::ptr;
+use std::mem::{offset_of, size_of};
 use std::str;
 
 pub use ibsim_sys as sys;
@@ -73,59 +72,46 @@ pub trait WireMessage: Sized {
     fn decode(bytes: &[u8]) -> Result<Self>;
 }
 
-/// Private marker for raw C structs whose every bit pattern is valid.
-///
-/// All implementations contain only integer scalars and integer arrays.
-unsafe trait WirePod: Copy {}
-unsafe impl WirePod for sys::sim_vendor {}
-unsafe impl WirePod for sys::sim_port {}
-unsafe impl WirePod for sys::sim_request {}
-unsafe impl WirePod for sys::sim_ctl {}
-unsafe impl WirePod for sys::sim_client_info {}
-
-fn encode_raw<T: WirePod>(raw: &T) -> Vec<u8> {
-    let mut bytes = vec![0_u8; size_of::<T>()];
-    // SAFETY: callers construct raw values from zeroed defaults, so C padding
-    // is initialized. `bytes` is exactly the destination object's byte size.
-    unsafe {
-        ptr::copy_nonoverlapping(
-            (raw as *const T).cast::<u8>(),
-            bytes.as_mut_ptr(),
-            bytes.len(),
-        );
-    }
-    bytes
-}
-
-fn decode_raw<T: WirePod>(bytes: &[u8]) -> Result<T> {
-    if bytes.len() != size_of::<T>() {
-        return Err(Error::InvalidWireSize {
-            expected: size_of::<T>(),
+fn check_wire_size<T>(bytes: &[u8]) -> Result<()> {
+    let expected = size_of::<T>();
+    if bytes.len() == expected {
+        Ok(())
+    } else {
+        Err(Error::InvalidWireSize {
+            expected,
             actual: bytes.len(),
-        });
-    }
-
-    let mut raw = MaybeUninit::<T>::uninit();
-    // SAFETY: `T` is restricted to integer-only protocol structs, for which
-    // every bit pattern is valid, and exactly `size_of::<T>()` bytes are copied.
-    unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), raw.as_mut_ptr().cast::<u8>(), bytes.len());
-        Ok(raw.assume_init())
+        })
     }
 }
 
-fn copy_chars_to_bytes<const N: usize>(source: &[i8; N]) -> [u8; N] {
-    let mut output = [0_u8; N];
-    for (dst, src) in output.iter_mut().zip(source.iter()) {
-        *dst = *src as u8;
-    }
-    output
+fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_ne_bytes());
 }
 
-fn copy_bytes_to_chars<const N: usize>(destination: &mut [i8; N], source: &[u8]) {
-    for (dst, src) in destination.iter_mut().zip(source.iter().copied()) {
-        *dst = src as i8;
-    }
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_ne_bytes());
+}
+
+fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    let mut value = [0_u8; 2];
+    value.copy_from_slice(&bytes[offset..offset + 2]);
+    u16::from_ne_bytes(value)
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0_u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_ne_bytes(value)
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0_u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_ne_bytes(value)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,12 +135,12 @@ impl From<sys::sim_vendor> for VendorInfo {
 
 impl From<VendorInfo> for sys::sim_vendor {
     fn from(value: VendorInfo) -> Self {
-        let mut raw = Self::default();
-        raw.vendor_id = value.vendor_id;
-        raw.vendor_part_id = value.vendor_part_id;
-        raw.hw_ver = value.hardware_version;
-        raw.fw_ver = value.firmware_version;
-        raw
+        Self {
+            vendor_id: value.vendor_id,
+            vendor_part_id: value.vendor_part_id,
+            hw_ver: value.hardware_version,
+            fw_ver: value.firmware_version,
+        }
     }
 }
 
@@ -162,11 +148,38 @@ impl WireMessage for VendorInfo {
     const WIRE_SIZE: usize = size_of::<sys::sim_vendor>();
 
     fn encode(&self) -> Vec<u8> {
-        encode_raw(&sys::sim_vendor::from(*self))
+        let mut bytes = vec![0_u8; Self::WIRE_SIZE];
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_vendor, vendor_id),
+            self.vendor_id,
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_vendor, vendor_part_id),
+            self.vendor_part_id,
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_vendor, hw_ver),
+            self.hardware_version,
+        );
+        write_u64(
+            &mut bytes,
+            offset_of!(sys::sim_vendor, fw_ver),
+            self.firmware_version,
+        );
+        bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        decode_raw::<sys::sim_vendor>(bytes).map(Into::into)
+        check_wire_size::<sys::sim_vendor>(bytes)?;
+        Ok(Self {
+            vendor_id: read_u32(bytes, offset_of!(sys::sim_vendor, vendor_id)),
+            vendor_part_id: read_u32(bytes, offset_of!(sys::sim_vendor, vendor_part_id)),
+            hardware_version: read_u32(bytes, offset_of!(sys::sim_vendor, hw_ver)),
+            firmware_version: read_u64(bytes, offset_of!(sys::sim_vendor, fw_ver)),
+        })
     }
 }
 
@@ -187,10 +200,10 @@ impl From<sys::sim_port> for PortInfo {
 
 impl From<PortInfo> for sys::sim_port {
     fn from(value: PortInfo) -> Self {
-        let mut raw = Self::default();
-        raw.lid = value.lid;
-        raw.state = value.state;
-        raw
+        Self {
+            lid: value.lid,
+            state: value.state,
+        }
     }
 }
 
@@ -198,11 +211,18 @@ impl WireMessage for PortInfo {
     const WIRE_SIZE: usize = size_of::<sys::sim_port>();
 
     fn encode(&self) -> Vec<u8> {
-        encode_raw(&sys::sim_port::from(*self))
+        let mut bytes = vec![0_u8; Self::WIRE_SIZE];
+        write_u16(&mut bytes, offset_of!(sys::sim_port, lid), self.lid);
+        bytes[offset_of!(sys::sim_port, state)] = self.state;
+        bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        decode_raw::<sys::sim_port>(bytes).map(Into::into)
+        check_wire_size::<sys::sim_port>(bytes)?;
+        Ok(Self {
+            lid: read_u16(bytes, offset_of!(sys::sim_port, lid)),
+            state: bytes[offset_of!(sys::sim_port, state)],
+        })
     }
 }
 
@@ -282,31 +302,49 @@ impl WireMessage for MadRequest {
     const WIRE_SIZE: usize = size_of::<sys::sim_request>();
 
     fn encode(&self) -> Vec<u8> {
-        let mut raw = sys::sim_request::default();
-        raw.dlid = self.dlid;
-        raw.slid = self.slid;
-        raw.dqp = self.destination_qp;
-        raw.sqp = self.source_qp;
-        raw.status = self.status;
-        raw.length = self.payload.len() as u64;
-        copy_bytes_to_chars(&mut raw.mad, &self.payload);
-        encode_raw(&raw)
+        let mut bytes = vec![0_u8; Self::WIRE_SIZE];
+        write_u32(&mut bytes, offset_of!(sys::sim_request, dlid), self.dlid);
+        write_u32(&mut bytes, offset_of!(sys::sim_request, slid), self.slid);
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_request, dqp),
+            self.destination_qp,
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_request, sqp),
+            self.source_qp,
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_request, status),
+            self.status,
+        );
+        write_u64(
+            &mut bytes,
+            offset_of!(sys::sim_request, length),
+            self.payload.len() as u64,
+        );
+        let mad = offset_of!(sys::sim_request, mad);
+        bytes[mad..mad + self.payload.len()].copy_from_slice(&self.payload);
+        bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        let raw = decode_raw::<sys::sim_request>(bytes)?;
-        let len = usize::try_from(raw.length).map_err(|_| Error::InvalidMadLength(raw.length))?;
+        check_wire_size::<sys::sim_request>(bytes)?;
+        let raw_length = read_u64(bytes, offset_of!(sys::sim_request, length));
+        let len = usize::try_from(raw_length).map_err(|_| Error::InvalidMadLength(raw_length))?;
         if len > MAD_CAPACITY {
-            return Err(Error::InvalidMadLength(raw.length));
+            return Err(Error::InvalidMadLength(raw_length));
         }
-        let mad = copy_chars_to_bytes(&raw.mad);
+        let mad = offset_of!(sys::sim_request, mad);
         Ok(Self {
-            dlid: raw.dlid,
-            slid: raw.slid,
-            destination_qp: raw.dqp,
-            source_qp: raw.sqp,
-            status: raw.status,
-            payload: mad[..len].to_vec(),
+            dlid: read_u32(bytes, offset_of!(sys::sim_request, dlid)),
+            slid: read_u32(bytes, offset_of!(sys::sim_request, slid)),
+            destination_qp: read_u32(bytes, offset_of!(sys::sim_request, dqp)),
+            source_qp: read_u32(bytes, offset_of!(sys::sim_request, sqp)),
+            status: read_u32(bytes, offset_of!(sys::sim_request, status)),
+            payload: bytes[mad..mad + len].to_vec(),
         })
     }
 }
@@ -454,30 +492,44 @@ impl WireMessage for ControlMessage {
     const WIRE_SIZE: usize = size_of::<sys::sim_ctl>();
 
     fn encode(&self) -> Vec<u8> {
-        let mut raw = sys::sim_ctl::default();
-        raw.magic = sys::SIM_MAGIC;
-        raw.clientid = self.client_id;
-        raw.type_ = self.kind.as_raw();
-        raw.len = self.data.len() as u32;
-        copy_bytes_to_chars(&mut raw.data, &self.data);
-        encode_raw(&raw)
+        let mut bytes = vec![0_u8; Self::WIRE_SIZE];
+        write_u32(&mut bytes, offset_of!(sys::sim_ctl, magic), sys::SIM_MAGIC);
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_ctl, clientid),
+            self.client_id,
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_ctl, type_),
+            self.kind.as_raw(),
+        );
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_ctl, len),
+            self.data.len() as u32,
+        );
+        let data = offset_of!(sys::sim_ctl, data);
+        bytes[data..data + self.data.len()].copy_from_slice(&self.data);
+        bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        let raw = decode_raw::<sys::sim_ctl>(bytes)?;
-        if raw.magic != sys::SIM_MAGIC {
-            return Err(Error::InvalidMagic(raw.magic));
+        check_wire_size::<sys::sim_ctl>(bytes)?;
+        let magic = read_u32(bytes, offset_of!(sys::sim_ctl, magic));
+        if magic != sys::SIM_MAGIC {
+            return Err(Error::InvalidMagic(magic));
         }
-        let kind = ControlType::try_from(raw.type_)?;
-        let len = raw.len as usize;
+        let kind = ControlType::try_from(read_u32(bytes, offset_of!(sys::sim_ctl, type_)))?;
+        let len = read_u32(bytes, offset_of!(sys::sim_ctl, len)) as usize;
         if len > CONTROL_DATA_CAPACITY {
             return Err(Error::ControlDataTooLong(len));
         }
-        let data = copy_chars_to_bytes(&raw.data);
+        let data = offset_of!(sys::sim_ctl, data);
         Ok(Self {
-            client_id: raw.clientid,
+            client_id: read_u32(bytes, offset_of!(sys::sim_ctl, clientid)),
             kind,
-            data: data[..len].to_vec(),
+            data: bytes[data..data + len].to_vec(),
         })
     }
 }
@@ -532,22 +584,33 @@ impl WireMessage for ClientInfo {
     const WIRE_SIZE: usize = size_of::<sys::sim_client_info>();
 
     fn encode(&self) -> Vec<u8> {
-        let mut raw = sys::sim_client_info::default();
-        raw.id = self.id;
-        raw.qp = self.qp;
-        raw.issm = if self.is_sm { 1 } else { 0 };
-        copy_bytes_to_chars(&mut raw.nodeid, &self.node_id);
-        encode_raw(&raw)
+        let mut bytes = vec![0_u8; Self::WIRE_SIZE];
+        write_u32(&mut bytes, offset_of!(sys::sim_client_info, id), self.id);
+        write_u32(&mut bytes, offset_of!(sys::sim_client_info, qp), self.qp);
+        write_u32(
+            &mut bytes,
+            offset_of!(sys::sim_client_info, issm),
+            if self.is_sm { 1 } else { 0 },
+        );
+        let nodeid = offset_of!(sys::sim_client_info, nodeid);
+        bytes[nodeid..nodeid + self.node_id.len()].copy_from_slice(&self.node_id);
+        bytes
     }
 
     fn decode(bytes: &[u8]) -> Result<Self> {
-        let raw = decode_raw::<sys::sim_client_info>(bytes)?;
-        let node_id = copy_chars_to_bytes(&raw.nodeid);
-        let end = node_id
+        check_wire_size::<sys::sim_client_info>(bytes)?;
+        let nodeid = offset_of!(sys::sim_client_info, nodeid);
+        let node_bytes = &bytes[nodeid..nodeid + 32];
+        let end = node_bytes
             .iter()
             .position(|&byte| byte == 0)
             .ok_or(Error::NodeIdNotTerminated)?;
-        Self::new(raw.id, raw.qp, raw.issm != 0, &node_id[..end])
+        Self::new(
+            read_u32(bytes, offset_of!(sys::sim_client_info, id)),
+            read_u32(bytes, offset_of!(sys::sim_client_info, qp)),
+            read_u32(bytes, offset_of!(sys::sim_client_info, issm)) != 0,
+            &node_bytes[..end],
+        )
     }
 }
 
