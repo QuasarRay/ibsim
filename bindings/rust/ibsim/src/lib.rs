@@ -425,9 +425,7 @@ impl ControlMessage {
         Self {
             client_id,
             kind: ControlType::SetIsSm,
-            data: (if enabled { 1_u32 } else { 0_u32 })
-                .to_ne_bytes()
-                .to_vec(),
+            data: (if enabled { 1_u32 } else { 0_u32 }).to_ne_bytes().to_vec(),
         }
     }
 
