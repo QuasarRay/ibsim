@@ -1,0 +1,10 @@
+[package]
+name = "ibsim"
+version = "0.12.0"
+edition = "2021"
+license = "GPL-2.0-only OR BSD-2-Clause"
+description = "Safe and idiomatic Rust types for the ibsim public protocol ABI"
+publish = false
+
+[dependencies]
+ibsim-sys = { path = "../ibsim-sys" }
