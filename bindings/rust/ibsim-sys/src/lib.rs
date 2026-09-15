@@ -131,6 +131,8 @@ mod tests {
 
         assert_eq!(size_of::<sim_client_info>(), 44);
         assert_eq!(offset_of!(sim_client_info, nodeid), 12);
-        assert_eq!(size_of::<name_t>(), 110);
+
+        assert_eq!(size_of::<sockaddr_un>(), 110);
+        assert_eq!(size_of::<name_t>(), 112);
     }
 }
