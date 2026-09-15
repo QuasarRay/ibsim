@@ -35,15 +35,25 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWireSize { expected, actual } => {
-                write!(f, "invalid wire size: expected {expected} bytes, got {actual}")
+                write!(
+                    f,
+                    "invalid wire size: expected {expected} bytes, got {actual}"
+                )
             }
             Self::InvalidMagic(value) => write!(f, "invalid ibsim control magic 0x{value:08x}"),
             Self::UnknownControlType(value) => write!(f, "unknown ibsim control type {value}"),
             Self::ControlDataTooLong(len) => {
-                write!(f, "control payload is {len} bytes; maximum is {CONTROL_DATA_CAPACITY}")
+                write!(
+                    f,
+                    "control payload is {len} bytes; maximum is {CONTROL_DATA_CAPACITY}"
+                )
             }
-            Self::MadTooLong(len) => write!(f, "MAD payload is {len} bytes; maximum is {MAD_CAPACITY}"),
-            Self::InvalidMadLength(len) => write!(f, "wire MAD length {len} exceeds {MAD_CAPACITY}"),
+            Self::MadTooLong(len) => {
+                write!(f, "MAD payload is {len} bytes; maximum is {MAD_CAPACITY}")
+            }
+            Self::InvalidMadLength(len) => {
+                write!(f, "wire MAD length {len} exceeds {MAD_CAPACITY}")
+            }
             Self::NodeIdTooLong(len) => {
                 write!(f, "node ID is {len} bytes; maximum is {NODE_ID_CAPACITY}")
             }
@@ -415,7 +425,9 @@ impl ControlMessage {
         Self {
             client_id,
             kind: ControlType::SetIsSm,
-            data: u32::from(enabled).to_ne_bytes().to_vec(),
+            data: (if enabled { 1_u32 } else { 0_u32 })
+                .to_ne_bytes()
+                .to_vec(),
         }
     }
 
@@ -525,7 +537,7 @@ impl WireMessage for ClientInfo {
         let mut raw = sys::sim_client_info::default();
         raw.id = self.id;
         raw.qp = self.qp;
-        raw.issm = u32::from(self.is_sm);
+        raw.issm = if self.is_sm { 1 } else { 0 };
         copy_bytes_to_chars(&mut raw.nodeid, &self.node_id);
         encode_raw(&raw)
     }
